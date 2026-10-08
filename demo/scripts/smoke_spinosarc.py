@@ -133,6 +133,7 @@ class SpinoSarcSmoke(unittest.TestCase):
         missing = MultiLevelAnalyzer(analyzer, loaded['axial_slices'], str(path)).analyze_all(
             gap, forbidden_muscle_callback)
         self.assertIsNone(missing['levels']['L4-L5']['canal_csa_mm2'])
+        self.assertIsNone(missing['levels']['L4-L5']['stenosis'])
         single = self.save('slice.nii.gz', np.ones((4, 5, 1), np.float32),
                            np.diag([2, 1.5, 1, 1]))
         summary = analyzer.analyze(str(single))
@@ -140,6 +141,97 @@ class SpinoSarcSmoke(unittest.TestCase):
         self.assertIsNone(summary['sarcopenia'])
         self.assertFalse(summary['segmentation_mask'].any())
         self.assertEqual(summary['segmentation_mask_kind'], 'empty_muscle_display_mask')
+
+    def test_canal_flags_current_manual_levels_json_and_reset(self):
+        _, _, loaded = self.axial_fixture()
+        window = SpinoSarcDemoWindow()
+        self.addCleanup(window.close)
+        window.load_files([loaded['sources'][0]['path']])
+        window.analysis_output = self.directory / 'flags'
+        window.analysis_output.mkdir()
+        window.last_result = {'sources': window.sources}
+        window.detected_levels = {'L5-S': {'axial_slice_idx': 1, 'type': 'IVD'},
+                                  'L3_body': {'axial_slice_idx': None}}
+        window.current_slice_idx = 1
+        window.canal_nifti_path = 'supplied-test-mask'
+        # 42 native pixels × 3 mm² =>126 mm². The old manual ROI path
+        # incorrectly called this "no stenosis" while multilevel said early.
+        mask = np.zeros(loaded['axial_slices'][1]['pixel_array'].shape, bool)
+        mask[:6, :7] = True
+        with patch.object(window, '_compute_canal_overlay_for_axial_slice', return_value=mask):
+            window._on_analyze()
+        current = window.last_result['current_axial_measurement']
+        self.assertEqual(current['area_mm2'], 126.)
+        self.assertEqual(current['stenosis']['category'], 'early')
+        self.assertIsNotNone(current['stenosis']['caveat'])
+        self.assertIn('early', window.stenosis_label.text())
+        self.assertEqual(current['native_frame_index'], loaded['axial_slices'][1]['native_frame_index'])
+        polygon = [(0., 0.), (7., 0.), (7., 6.), (0., 6.)]
+        with patch.object(window.axial_display, 'get_roi_points_imgcoords', return_value=polygon):
+            window._on_roi_changed()
+        manual = window.last_result['manual_roi_measurement']
+        self.assertEqual(manual['stenosis']['category'], current['stenosis']['category'])
+        self.assertEqual(manual['stenosis']['measured_structure'], 'manual_roi')
+        self.assertEqual(manual['area_mm2'], current['area_mm2'])
+        window.multi_level_result = window._add_level_flags({'levels': {
+            'L5-S': {'axial_slice_idx': 1, 'canal_csa_mm2': 126.},
+            'L2-L3': {'axial_slice_idx': None, 'canal_csa_mm2': None}}})
+        window._show_level_measurements()
+        self.assertIn('EARLY', window.levels_list.item(0).text())
+        self.assertIn('not assessed', window.levels_list.item(1).text())
+        self.assertIsNone(window.multi_level_result['levels']['L2-L3']['stenosis'])
+        saved = json.loads((window.analysis_output / 'findings.json').read_text())
+        self.assertEqual(saved['current_axial_measurement']['stenosis']['category'], 'early')
+        self.assertEqual(saved['manual_roi_measurement']['contour_pixels'], [list(point) for point in polygon])
+        with patch.object(window, '_compute_canal_overlay_for_axial_slice', return_value=None):
+            window._refresh_axial_with_canal_overlay()
+        self.assertEqual(window.stenosis_label.text(), '')
+        window._on_roi_clear()
+        self.assertNotIn('manual_roi_measurement', window.last_result)
+
+    def test_canal_empty_mask_does_not_flag_absolute_narrowing(self):
+        window = SpinoSarcDemoWindow()
+        self.addCleanup(window.close)
+        window.detected_levels = {}
+        result = window._add_level_flags({'levels': {
+            'L4-L5': {'canal_csa_mm2': 0., 'axial_slice_idx': 1},
+            'L5-S': {'canal_csa_mm2': None, 'axial_slice_idx': None}}})
+        self.assertTrue(all(level['stenosis'] is None for level in result['levels'].values()))
+        self.assertEqual(result['canal_narrowing_assessment_status'], 'not_assessed')
+        self.assertIsNone(window._canal_flag(float('nan'), 1))
+
+    def test_l3_risk_visible_only_with_reference_slice_and_demographics(self):
+        _, _, loaded = self.axial_fixture()
+        window = SpinoSarcDemoWindow()
+        self.addCleanup(window.close)
+        window.load_files([loaded['sources'][0]['path']])
+        window.analysis_output = self.directory / 'l3-risk'
+        window.analysis_output.mkdir()
+        window.last_result = {'sources': window.sources}
+        window.detected_levels = {'L3_body': {'axial_slice_idx': 1}}
+        window.current_slice_idx = 1
+        _, output, _ = self.muscle_worker_fixture(loaded['axial_slices'], [1], Demographics(sex='M', height_cm=170.))
+        window._muscle_analysis_finished(output)
+        self.assertIn('HIGH sarcopenia risk', window.risk_label.text())
+        self.assertIn('Hamaguchi', window.risk_label.toolTip())
+        saved = json.loads((window.analysis_output / 'findings.json').read_text())
+        self.assertEqual(saved['sarcopenia_risk_assessment_status'], 'research_threshold_flag')
+        self.assertEqual(saved['muscle_frames']['1']['sarcopenia']['risk_category'], 'High')
+        # A cache with prior demographics cannot keep showing that risk after
+        # restoration with missing current height/sex; the masks stay usable.
+        window._restore_muscle_results(saved)
+        self.assertEqual(set(window.muscle_results), {1})
+        self.assertIn('not assessed', window.risk_label.text())
+        self.assertIsNone(window.muscle_results[1]['sarcopenia']['pmi_cm2_per_m2'])
+        self.assertEqual(window.last_result['sarcopenia_risk_assessment_status'], 'insufficient_demographics')
+        window.height_input.setValue(170)
+        window.sex_input.setCurrentText('M')
+        window._restore_muscle_results(saved)
+        self.assertIn('HIGH sarcopenia risk', window.risk_label.text())
+        window.detected_levels['L3_body']['axial_slice_idx'] = None
+        window._restore_muscle_results(saved)
+        self.assertIn('not assessed', window.risk_label.text())
+        self.assertIsNone(window.muscle_results[1]['sarcopenia']['pmi_cm2_per_m2'])
 
     def test_sagittal_physical_reorientation_without_interpolation(self):
         data = np.arange(9 * 3 * 7, dtype=np.float32).reshape(9, 3, 7)

@@ -1,5 +1,6 @@
 """Local spine demo built on SpinoSarc's existing desktop viewer."""
 from pathlib import Path
+from dataclasses import asdict
 import json
 import os
 import sys
@@ -9,14 +10,16 @@ import numpy as np
 import nibabel as nib
 from nibabel.processing import resample_from_to
 from PyQt6.QtCore import QThread, QTimer, pyqtSignal, Qt
+from PyQt6.QtGui import QColor
 from PyQt6.QtWidgets import (QApplication, QFileDialog, QLabel, QMessageBox, QPushButton,
                             QListWidgetItem, QTableWidgetItem, QScrollArea, QSplitter,
                             QLayout, QFrame)
-from .gui import SpinoSarcWindow, SUCCESS, PRIMARY, EngineLoaderThread
+from .gui import SpinoSarcWindow, SUCCESS, PRIMARY, WARNING, DANGER, TXT_LT, EngineLoaderThread
 from .analyzer import SpinoSarcAnalyzer
 from .demo_io import prepare_volumes, write_native_slice_nifti, native_slice_affine
 from .totalspineseg.runner import TotalSpineSegRunner
 from .totalspineseg.level_mapper import LevelMapper
+from .totalspineseg.canal_csa import classify_stenosis
 
 
 class SegmentationWorker(QThread):
@@ -59,6 +62,11 @@ def restrict_l3_indices(result, is_l3):
         sarc['notes'] = list(sarc.get('notes', [])) + ['This frame is not the matched L3 body reference slice; PMI is not assessed.']
         result['sarcopenia'] = sarc
         result['sarcopenia_assessment_status'] = 'not_l3_reference_slice'
+    else:
+        sarc = result.get('sarcopenia') or {}
+        result['sarcopenia_assessment_status'] = (
+            'research_threshold_flag' if sarc.get('pmi_cm2_per_m2') is not None
+            and sarc.get('risk_category') in ('Low', 'Moderate', 'High') else 'insufficient_demographics')
     return result
 
 
@@ -151,6 +159,7 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
         self.analyze_all_btn.setToolTip('Measure canal area on covered native axial slices. Numbering needs review.')
         self.levels_status_label.setText('Load sagittal T2, then detect the lumbar levels.')
         self.csa_label.setText('Canal area: not assessed')
+        self.stenosis_label.setWordWrap(True)
         self.status_label.setText('Ready — load sagittal T2; native axial T2 is optional.')
         example_manifest = os.environ.get('SPINOSARC_AXIAL_EXAMPLE_MANIFEST')
         button = QPushButton('Load open axial + sagittal example' if example_manifest and Path(example_manifest).is_file() else 'Load open SPIDER example')
@@ -384,16 +393,95 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
                                      canal_overlay=canal_mask)
         if canal_mask is not None:
             area = float(canal_mask.sum() * np.prod(frame['pixel_spacing']))
-            self.csa_label.setText(f'Canal area: {area:.1f} mm² · research measurement')
+            self._show_canal_measurement(area, self.current_slice_idx)
+        else:
+            self._reset_csa_display()
         if result is not None:
             self._show_muscle_metrics(result)
         elif self.muscles_requested:
             self.muscle_table.setRowCount(0)
             self.pmi_label.setText('Muscles: this slice has not been analyzed')
             self.risk_label.setText('L3 indices: not assessed')
+            self.risk_label.setStyleSheet(f'font-size: 14px; font-weight: 700; color: {TXT_LT};')
+            self.risk_label.setToolTip('')
+
+    def _canal_flag(self, area, slice_index, level_name=''):
+        if area is None or not np.isfinite(area) or area <= 0:
+            return None
+        if not level_name:
+            level_name = next((name for name, info in self.detected_levels.items()
+                               if name != 'L3_body' and info.get('axial_slice_idx') == slice_index), '')
+        flag = classify_stenosis(area, level_name)
+        flag.update(assessment_status='research_threshold_flag',
+                    method='area_thresholds_75_100_130_mm2', measured_structure='tss_canal_mask',
+                    level=level_name or None, registration_status=self.registration_status,
+                    numbering_status='needs_confirmation')
+        return flag
+
+    def _show_canal_measurement(self, area, slice_index, manual=False):
+        flag = self._canal_flag(area, slice_index)
+        self.csa_label.setText(f'{"Manual ROI" if manual else "Canal"} area: {area:.1f} mm²')
+        if flag is None:
+            self.stenosis_label.setText('Canal narrowing flag: not assessed')
+            self.stenosis_label.setStyleSheet(f'font-size: 12px; color: {TXT_LT};')
+            self.stenosis_label.setToolTip('A non-empty contour is required.')
+            return
+        label = flag['label'] if flag['flag'] else 'within area thresholds (≥130 mm²)'
+        color = {'absolute': DANGER, 'relative': WARNING, 'early': WARNING, 'normal': SUCCESS}[flag['category']]
+        self.stenosis_label.setText(f'Canal narrowing flag: {label} · threshold rule')
+        self.stenosis_label.setStyleSheet(f'font-size: 12px; font-weight: 600; color: {color};')
+        self.stenosis_label.setToolTip('\n'.join(filter(None, (
+            flag.get('caveat'), 'Research flag based on area; numbering and alignment need review.'))))
+
+    def _add_level_flags(self, result):
+        for name, level in result.get('levels', {}).items():
+            level['stenosis'] = self._canal_flag(level.get('canal_csa_mm2'), level.get('axial_slice_idx'), name)
+            level['canal_narrowing_assessment_status'] = (
+                'research_threshold_flag' if level['stenosis'] is not None else 'not_assessed')
+        result['canal_narrowing_assessment_status'] = (
+            'research_threshold_flag' if any(level['stenosis'] is not None
+                for level in result.get('levels', {}).values()) else 'not_assessed')
+        return result
+
+    def _update_sarcopenia_risk_status(self):
+        l3_index = self.detected_levels.get('L3_body', {}).get('axial_slice_idx')
+        l3 = self.muscle_results.get(l3_index)
+        status = l3.get('sarcopenia_assessment_status', 'not_assessed') if l3 else 'not_assessed'
+        self.last_result['sarcopenia_risk_assessment_status'] = status
+        if self.multi_level_result and self.multi_level_result.get('sarcopenia'):
+            self.multi_level_result['sarcopenia']['assessment_status'] = status
 
     def _reset_csa_display(self):
         self.csa_label.setText('Canal area: not assessed')
+        self.stenosis_label.setText('')
+        self.stenosis_label.setToolTip('')
+
+    def _on_roi_changed(self):
+        points = self.axial_display.get_roi_points_imgcoords()
+        if points is None:
+            self._reset_csa_display()
+            if self.last_result is not None and 'manual_roi_measurement' in self.last_result:
+                self.last_result.pop('manual_roi_measurement')
+                self._persist_findings()
+            return
+        area = self._polygon_area_px(points) * float(np.prod(self._get_current_pixel_spacing()))
+        self._show_canal_measurement(area, self.current_slice_idx, manual=True)
+        if self.last_result is not None and self.axial_slices:
+            flag = self._canal_flag(area, self.current_slice_idx)
+            if flag is not None:
+                flag['measured_structure'] = 'manual_roi'
+            self.last_result['manual_roi_measurement'] = {
+                'area_mm2': area, 'slice_index': self.current_slice_idx,
+                'contour_pixels': np.asarray(points).tolist(), 'stenosis': flag,
+                'source_frame': frame_identity(self.axial_slices[self.current_slice_idx]),
+                'method': 'manual_polygon_pixel_area'}
+            self._persist_findings()
+
+    def _on_roi_clear(self):
+        super()._on_roi_clear()
+        if self.last_result is not None:
+            self.last_result.pop('manual_roi_measurement', None)
+            self._persist_findings()
 
     def _on_detect_levels(self):
         if self.muscle_worker and self.muscle_worker.isRunning():
@@ -443,7 +531,9 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
                                 'registration_status': self.registration_status,
                                 'geometry_warnings': self.geometry_warnings,
                                 'dural_sac_assessment_status': 'not_assessed',
-                                'canal_area_assessment_status': 'not_assessed' if not self.axial_slices else 'available_for_research_measurement'}
+                                'canal_area_assessment_status': 'not_assessed' if not self.axial_slices else 'available_for_research_measurement',
+                                'canal_narrowing_assessment_status': 'not_assessed',
+                                'sarcopenia_risk_assessment_status': 'not_assessed'}
             self.levels_list.clear()
             for name, info in self.detected_levels.items():
                 if info['type'] != 'IVD':
@@ -471,7 +561,7 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
             self.status_label.setText('Canal mask unavailable on this plane.'); return
         frame = self.axial_slices[self.current_slice_idx]
         area = float(mask.sum() * np.prod(frame['pixel_spacing']))
-        self.csa_label.setText(f'Canal area: {area:.1f} mm² · research measurement')
+        self._show_canal_measurement(area, self.current_slice_idx)
         self.last_result['current_axial_measurement'] = {'area_mm2': area, 'slice_index': self.current_slice_idx,
                                                        'image_position_lps': frame['image_position'],
                                                        'pixel_spacing_mm': frame['pixel_spacing'],
@@ -479,10 +569,13 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
                                                        'native_frame_index': frame['native_frame_index'],
                                                        'native_frame_axis': frame['native_frame_axis'],
                                                        'assessment_status': 'research_only',
+                                                       'stenosis': self._canal_flag(area, self.current_slice_idx),
                                                        'registration_status': self.registration_status,
                                                        'source_path': frame.get('source_path'),
                                                        'sop_instance_uid': frame.get('sop_instance_uid'),
                                                        'method': 'tss_mask_on_native_plane_pixel_count_times_pixel_area'}
+        self.last_result['canal_narrowing_assessment_status'] = (
+            'research_threshold_flag' if self.last_result['current_axial_measurement']['stenosis'] else 'not_assessed')
         self._persist_findings()
         self._refresh_axial_with_canal_overlay()
         if self.muscles_requested and self.muscle_analyzer is not None:
@@ -494,10 +587,11 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
             return
         result = MultiLevelAnalyzer(self.analyzer, self.axial_slices, self.canal_nifti_path).analyze_all(
             self.detected_levels, slice_nifti_producer=lambda _: None)
-        # Canal measurements do not establish dural-sac stenosis grades.
+        self._add_level_flags(result)
         self.multi_level_result = result
         self.last_result['multi_level_measurements'] = result
         self.last_result['canal_area_assessment_status'] = 'research_only'
+        self.last_result['canal_narrowing_assessment_status'] = result['canal_narrowing_assessment_status']
         self._persist_findings()
         self._show_level_measurements()
         if self.muscles_requested and self.muscle_analyzer is not None:
@@ -505,7 +599,7 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
                        if info.get('axial_slice_idx') is not None]
             self._start_muscle_analysis(indices)
         else:
-            self.status_label.setText('Canal measurements complete. Diagnostic stenosis grades are not assessed.')
+            self.status_label.setText('Canal measurements and narrowing threshold flags complete.')
 
     def _show_level_measurements(self):
         result = self.multi_level_result
@@ -515,9 +609,16 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
         for name, info in result['levels'].items():
             area = info.get('canal_csa_mm2')
             text = f'{name}: {area:.1f} mm²' if area is not None else f'{name}: not assessed'
+            flag = info.get('stenosis')
+            if flag is not None:
+                text += f" · {flag['category'].upper()}"
             if info.get('muscles'):
                 text += f" · {len(info['muscles'])} muscles"
-            item = QListWidgetItem(text + ' · numbering unconfirmed')
+            item = QListWidgetItem(text)
+            item.setToolTip(' · numbering unconfirmed\n' + (flag['label'] if flag else 'Not assessed')
+                            + ('\n' + flag['caveat'] if flag and flag.get('caveat') else ''))
+            if flag is not None:
+                item.setForeground(QColor(DANGER if flag['category'] == 'absolute' else WARNING if flag['flag'] else SUCCESS))
             item.setData(Qt.ItemDataRole.UserRole, info.get('axial_slice_idx'))
             self.levels_list.addItem(item)
 
@@ -562,6 +663,7 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
                 'result': l3.get('sarcopenia') if l3 else None,
                 'note': 'Research indices; no nearest-slice substitution. L3 numbering needs review.' if l3 else 'L3 body is not covered by native axial slices; indices not assessed.'}
             self._show_level_measurements()
+        self._update_sarcopenia_risk_status()
         if output['frames'] and self.current_slice_idx not in self.muscle_results:
             self.slice_slider.setValue(next(iter(output['frames'])))
         self._refresh_axial_with_canal_overlay()
@@ -584,11 +686,22 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
         self.pmi_label.setWordWrap(True)
         l3_index = self.detected_levels.get('L3_body', {}).get('axial_slice_idx')
         pmi = sarc.get('pmi_cm2_per_m2') if self.current_slice_idx == l3_index else None
-        self.risk_label.setText(f'L3 PMI: {pmi:.2f} cm²/m² · research index' if pmi is not None
-                               else 'L3 PMI: not assessed · requires L3 coverage and height')
+        risk = sarc.get('risk_category', 'Unknown') if pmi is not None else 'Unknown'
+        if pmi is not None and risk in ('Low', 'Moderate', 'High'):
+            self.risk_label.setText(f'L3 PMI: {pmi:.2f} cm²/m²\n{risk.upper()} sarcopenia risk · threshold flag')
+            refs = [f"{name}: PMI {entry['patient_value']:.2f}; cutoff {entry['threshold_cm2_per_m2']:.2f}; "
+                    + ('below' if entry['below_threshold'] else 'at/above')
+                    for name, entry in sarc.get('thresholds', {}).items()]
+            self.risk_label.setToolTip('\n'.join(refs + sarc.get('notes', [])))
+        else:
+            self.risk_label.setText('L3 risk: not assessed · requires L3 coverage, height and sex')
+            self.risk_label.setToolTip('')
+        color = {'Low': SUCCESS, 'Moderate': WARNING, 'High': DANGER, 'Unknown': TXT_LT}.get(risk, TXT_LT)
+        self.risk_label.setStyleSheet(f'font-size: 14px; font-weight: 700; color: {color};')
 
     def _restore_muscle_results(self, saved):
         restored = {}
+        demographics = self._get_demographics()
         for key, value in saved.get('muscle_frames', {}).items():
             try:
                 index = int(key)
@@ -607,8 +720,12 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
                 labels = np.asarray(mask.dataobj)
                 if not np.isfinite(labels).all() or not np.array_equal(labels, np.rint(labels)) or not set(np.unique(labels)).issubset(set(range(9))):
                     continue
+                pixels = np.asarray(source.dataobj).squeeze()
+                muscles = self.analyzer._compute_muscle_metrics(pixels, labels.squeeze(), value['pixel_area_mm2'])
                 restored[index] = restrict_l3_indices(
-                    dict(value, image_array=np.asarray(source.dataobj).squeeze(), segmentation_mask=labels.squeeze()),
+                    dict(value, image_array=pixels, segmentation_mask=labels.squeeze(),
+                         sarcopenia=asdict(self.analyzer._compute_sarcopenia(muscles, demographics)),
+                         demographics=asdict(demographics) if demographics else None),
                     index == self.detected_levels.get('L3_body', {}).get('axial_slice_idx'))
             except (OSError, ValueError, KeyError, TypeError, nib.filebasedimages.ImageFileError):
                 continue
@@ -620,7 +737,10 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
         self.last_result['sarcopenia_diagnosis_status'] = 'not_assessed'
         self.last_result['analysis_mode'] = 'canal_and_muscles' if restored else 'canal_only'
         if saved.get('multi_level_measurements'):
-            self.multi_level_result = json.loads(json.dumps(saved['multi_level_measurements']))
+            from .totalspineseg.multi_level_analyzer import MultiLevelAnalyzer
+            self.multi_level_result = self._add_level_flags(MultiLevelAnalyzer(
+                self.analyzer, self.axial_slices, self.canal_nifti_path).analyze_all(
+                    self.detected_levels, slice_nifti_producer=lambda _: None))
             for level in self.multi_level_result.get('levels', {}).values():
                 muscle = restored.get(level.get('axial_slice_idx'))
                 level.update(muscles=muscle.get('muscles', []) if muscle else [],
@@ -638,7 +758,9 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
             self.multi_level_result['analysis_mode'] = 'canal_and_muscles' if restored else 'canal_only'
             self.multi_level_result['muscle_assessment_status'] = 'research_only' if restored else 'not_assessed'
             self.last_result['multi_level_measurements'] = self.multi_level_result
+            self.last_result['canal_narrowing_assessment_status'] = self.multi_level_result['canal_narrowing_assessment_status']
             self._show_level_measurements()
+        self._update_sarcopenia_risk_status()
         if restored:
             self.slice_slider.setValue(next(iter(restored)))
             self._refresh_axial_with_canal_overlay()
@@ -650,6 +772,12 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
             self.grab().save(filename); self.status_label.setText(f'PNG saved: {filename}')
 
     def _persist_findings(self):
+        flags = [self.last_result.get(key, {}).get('stenosis')
+                 for key in ('current_axial_measurement', 'manual_roi_measurement')]
+        flags.extend(level.get('stenosis') for level in
+                     self.last_result.get('multi_level_measurements', {}).get('levels', {}).values())
+        self.last_result['canal_narrowing_assessment_status'] = (
+            'research_threshold_flag' if any(flag is not None for flag in flags) else 'not_assessed')
         (self.analysis_output / 'findings.json').write_text(json.dumps(self.last_result, indent=2, allow_nan=False) + '\n')
 
     def _on_export_excel(self):

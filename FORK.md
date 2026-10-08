@@ -19,25 +19,40 @@ is part of this repository.
 
 This fork implements a local research viewer and measurement pipeline:
 native MRI ingestion → physical geometry → TotalSpineSeg anatomical labels and
-canal mask → MuscleMap muscle masks → native-plane areas and left/right asymmetry
-→ source-linked JSON, masks and annotated images.
+canal mask → MuscleMap muscle masks → native-plane areas, left/right asymmetry
+and research threshold flags → source-linked JSON, masks and annotated images.
 
 It covers the anatomy, geometry, measurement and review components of the lumbar
 MRI project. It does not replace that project's HTTP backend. Herniation contours
 and dimensions, root compression, validated stenosis grades, conus pathology and
 radiology report generation require separate diagnostic components.
 
+The upstream canal-area flags are restored in the demo: the 75/100/130 mm²
+rules are shared by automatic measurements and manual ROI, displayed for the
+current slice and covered levels, and saved in findings JSON. These flags do
+not establish a clinical stenosis grade or validate the TSS canal mask as a
+separate dural-sac mask. Original PMI risk categories are shown only with a
+matched L3 body slice, height and sex; an uncovered L3 is not substituted with
+the nearest slice. Source identity, geometry, numbering and registration status
+remain part of the output.
+
+Restoring the flags changes only the added `lumbar_demo.py` adapter: it calls
+the existing `classify_stenosis` function and attaches flags even when the
+measurement coordinator uses `canal_only`. The original measurement,
+classification, muscle-analysis and base GUI files are unchanged by this
+restoration; existing PMI/risk calculations are reused.
+
 ## Changes relative to upstream
 
 | Files | Change |
 |---|---|
-| `spinosarc_app/lumbar_demo.py` | Dedicated demo entry point; anatomy and muscle workflows, native overlays, cache, JSON/PNG export, scrollable controls on laptop displays |
+| `spinosarc_app/lumbar_demo.py` | Dedicated demo entry point; anatomy and muscle workflows, native overlays, original research threshold flags and eligible L3 risk display, cache, JSON/PNG export, scrollable controls on laptop displays |
 | `spinosarc_app/demo_io.py` | MHA/NIfTI and classic MR DICOM; source-frame identity and exact native-plane geometry |
 | `spinosarc_app/totalspineseg/level_mapper.py` | RAS/LPS-aware point-to-plane matching; field-of-view and coverage checks |
 | `spinosarc_app/totalspineseg/runner.py` | Local pinned runtime, cancellable owned processes, explicit cleanup recovery |
 | `spinosarc_app/analyzer.py`, `inference_engine.py` | Optional MuscleMap, official asset verification, configuration-derived labels, CPU inversion before MPS postprocessing |
 | `spinosarc_app/gui.py` | Physical image aspect ratio support |
-| `spinosarc_app/totalspineseg/multi_level_analyzer.py` | Canal-only measurement path without nearest-slice substitution or diagnostic threshold classification |
+| `spinosarc_app/totalspineseg/multi_level_analyzer.py` | Previously added canal-only measurement path without nearest-slice substitution or diagnostic threshold classification; unchanged by flag restoration, which is handled in `lumbar_demo.py` |
 | `demo/` | Reproducible environments, model/data acquisition, runtime adapters, checks and instructions |
 
 No model was retrained. Official checkpoints are downloaded separately and verified.
