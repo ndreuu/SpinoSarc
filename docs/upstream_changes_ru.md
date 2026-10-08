@@ -3,8 +3,11 @@
 Аудит от 08.10.2026. Исходный репозиторий —
 [neuromath/SpinoSarc](https://github.com/neuromath/SpinoSarc), базовый коммит
 `63b7405d1276740dfde75e00d1e7ad58da6c10fd`. Проверенная версия нашего кода —
-`1380b5eeaaf2184a61baef48fe1491241d3245f3`, ветка
-`codex/restore-upstream-flags`.
+`1380b5eeaaf2184a61baef48fe1491241d3245f3` — исторический снимок ветки
+`codex/restore-upstream-flags`, на котором проведён этот аудит. Текущая рабочая
+ветка форка — [`main`](https://github.com/ndreuu/SpinoSarc/tree/main);
+оригинальная основа сохранена в `upstream-baseline`, а версия демо закреплена
+тегом `demo-2026-10-08`.
 [Полный diff двух версий](https://github.com/ndreuu/SpinoSarc/compare/63b7405d1276740dfde75e00d1e7ad58da6c10fd...1380b5eeaaf2184a61baef48fe1491241d3245f3).
 
 За всю историю форка изменены **6 существовавших Python-файлов приложения**,

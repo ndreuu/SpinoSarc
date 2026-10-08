@@ -1,9 +1,17 @@
 # Отдельное пространство разработки SpinoSarc
 
 Это самостоятельный checkout [ndreuu/SpinoSarc](https://github.com/ndreuu/SpinoSarc).
-У него собственная `.git` и рабочая ветка `codex/spinosarc-workspace`, созданная
-от проверенного демо `codex/lumbar-mri-demo` (`9395f13`). Он не является
-подмодулем исходного проекта. `main` сохраняет upstream-основу.
+У него собственная `.git`; актуальная рабочая ветка и ветка по умолчанию —
+[`main`](https://github.com/ndreuu/SpinoSarc/tree/main). Она объединяет демо,
+восстановленные флаги оригинального инструмента и отдельное пространство разработки.
+Этот checkout не является подмодулем исходного проекта.
+
+Оригинал на коммите `63b7405` сохранён в
+[`upstream-baseline`](https://github.com/ndreuu/SpinoSarc/tree/upstream-baseline).
+Тег [`demo-2026-10-08`](https://github.com/ndreuu/SpinoSarc/tree/demo-2026-10-08)
+фиксирует текущую версию демо. Старые ветки `codex/lumbar-mri-demo`,
+`codex/spinosarc-workspace` и `codex/restore-upstream-flags` отражают этапы
+истории; дальнейшую работу начинать от `main`.
 
 ## Где что хранить
 
@@ -85,12 +93,24 @@ python3.12 demo/scripts/run_spinosarc.py --example
 ## Ветки и изменения
 
 `origin` — наш форк, `upstream` — оригинальный `neuromath/SpinoSarc`.
-Для следующего изменения создать ветку от текущего рабочего пространства:
+Для следующего изменения обновить `main` и создать от неё отдельную ветку:
 
 ```sh
+git fetch origin
+git switch main
+git pull --ff-only origin main
 git switch -c codex/next-change
 git remote -v
 git diff --check
+```
+
+После проверки изменения объединяются в `main`. Ветку `upstream-baseline`
+и тег `demo-2026-10-08` оставлять на зафиксированных версиях. Изменения
+форка относительно исходного кода можно посмотреть так:
+
+```sh
+git diff origin/upstream-baseline...main --stat
+git log origin/upstream-baseline..main --oneline
 ```
 
 Материалы исследования добавлять в `research/`, действующую документацию —

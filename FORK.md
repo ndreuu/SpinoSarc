@@ -3,11 +3,18 @@
 Repository: [ndreuu/SpinoSarc](https://github.com/ndreuu/SpinoSarc).
 Upstream: [neuromath/SpinoSarc](https://github.com/neuromath/SpinoSarc).
 Base revision: `63b7405d1276740dfde75e00d1e7ad58da6c10fd`.
-Demo implementation branch: `codex/lumbar-mri-demo`.
-Standalone workspace branch: `codex/spinosarc-workspace`.
+Current application and default development branch:
+[`main`](https://github.com/ndreuu/SpinoSarc/tree/main).
+Original upstream baseline branch:
+[`upstream-baseline`](https://github.com/ndreuu/SpinoSarc/tree/upstream-baseline).
+Fixed demo snapshot:
+[`demo-2026-10-08`](https://github.com/ndreuu/SpinoSarc/tree/demo-2026-10-08).
 
-`main` preserves the upstream baseline. The demo changes live on the development
-branch; the upstream license, citation, paper and original build files are retained.
+`main` contains the current standalone application, restored upstream flags,
+workspace layout and documentation. Earlier `codex/lumbar-mri-demo`,
+`codex/spinosarc-workspace` and `codex/restore-upstream-flags` branches preserve
+development history; use `main` for ongoing work. The upstream license, citation,
+paper and original build files are retained.
 The original README below the fork notice describes the upstream application.
 Use [demo/README.md](demo/README.md) for this branch's actual capabilities and setup.
 See [the detailed upstream change audit](docs/upstream_changes_ru.md) for each original-file change, its reason and behavior differences.
@@ -64,9 +71,11 @@ adapter reduces patch context and is explicitly marked experimental.
 
 ```sh
 git remote -v
-git switch codex/spinosarc-workspace
-git diff main...HEAD --stat
-git log main..HEAD --oneline
+git fetch origin
+git switch main
+git pull --ff-only origin main
+git diff origin/upstream-baseline...main --stat
+git log origin/upstream-baseline..main --oneline
 ```
 
 `origin` points to `ndreuu/SpinoSarc`; `upstream` points to `neuromath/SpinoSarc`.
@@ -74,12 +83,14 @@ Before incorporating future upstream changes, fetch them and inspect the diff:
 
 ```sh
 git fetch upstream
-git diff main..upstream/main --stat
+git diff origin/upstream-baseline..upstream/main --stat
 ```
 
-Merge selected upstream updates on a separate working branch, run the checks in
-`demo/README.md`, then update the main project's pinned submodule commit. A local
-branch name is for development; the consuming project pins an exact commit.
+Create changes on a feature branch from the updated `main` and run the checks in
+`demo/README.md` before merging them back. Inspect upstream updates on a separate
+working branch. Keep `upstream-baseline` at the original base revision for change
+audits and keep `demo-2026-10-08` at the fixed demo snapshot. The consuming parent
+project pins an exact submodule commit; updating this fork does not change that pin.
 
 Runtime environments, DICOM, weights, model manifests and generated results are
 excluded from version control. The public example is acquired from its original

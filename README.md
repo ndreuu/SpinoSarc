@@ -1,8 +1,13 @@
 # SpinoSarc
 
-This is the `ndreuu/SpinoSarc` fork. Our lumbar MRI demo is developed on
-`codex/lumbar-mri-demo`; the standalone development workspace is organized on
-`codex/spinosarc-workspace`. `main` preserves the upstream baseline.
+This is the `ndreuu/SpinoSarc` fork. **Use [`main`](https://github.com/ndreuu/SpinoSarc/tree/main)
+for the current application and development workspace.** It is the fork's default
+branch and includes the lumbar MRI demo, restored upstream flags and research layout.
+The original upstream baseline is preserved on
+[`upstream-baseline`](https://github.com/ndreuu/SpinoSarc/tree/upstream-baseline).
+The fixed demo snapshot is tagged
+[`demo-2026-10-08`](https://github.com/ndreuu/SpinoSarc/tree/demo-2026-10-08);
+earlier `codex/*` branches are historical development stages.
 See [the fork architecture and change map](FORK.md) and
 [the demo setup, launch and results guide](demo/README.md).
 
