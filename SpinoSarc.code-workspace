@@ -1,0 +1,14 @@
+{
+  "folders": [
+    { "name": "SpinoSarc", "path": "." }
+  ],
+  "settings": {
+    "search.exclude": {
+      "**/.venv*/**": true,
+      "**/data/**": true,
+      "**/var/**": true,
+      "**/artifacts/**": true,
+      "**/*.app/**": true
+    }
+  }
+}

@@ -39,6 +39,8 @@ def main():
     env['SPINOSARC_RUNTIME_ROOT'] = str(root)
     env['PYTHONPATH'] = str(REPO_ROOT) + (os.pathsep + env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
     arguments = ['--example'] if args.example else []
+    # python -m searches cwd before PYTHONPATH; always import this checkout.
+    os.chdir(REPO_ROOT)
     os.execve(str(python), [str(python), '-m', 'spinosarc_app.lumbar_demo', *arguments], env)
 
 

@@ -3,12 +3,17 @@
 Repository: [ndreuu/SpinoSarc](https://github.com/ndreuu/SpinoSarc).
 Upstream: [neuromath/SpinoSarc](https://github.com/neuromath/SpinoSarc).
 Base revision: `63b7405d1276740dfde75e00d1e7ad58da6c10fd`.
-Development branch: `codex/lumbar-mri-demo`.
+Demo implementation branch: `codex/lumbar-mri-demo`.
+Standalone workspace branch: `codex/spinosarc-workspace`.
 
 `main` preserves the upstream baseline. The demo changes live on the development
 branch; the upstream license, citation, paper and original build files are retained.
 The original README below the fork notice describes the upstream application.
 Use [demo/README.md](demo/README.md) for this branch's actual capabilities and setup.
+Use [docs/workspace_ru.md](docs/workspace_ru.md) for standalone development and
+[research/README.md](research/README.md) for research material. Research snapshots
+from the original backend project are clearly marked and do not imply its API
+is part of this repository.
 
 ## Architectural role
 
@@ -43,7 +48,7 @@ adapter reduces patch context and is explicitly marked experimental.
 
 ```sh
 git remote -v
-git switch codex/lumbar-mri-demo
+git switch codex/spinosarc-workspace
 git diff main...HEAD --stat
 git log main..HEAD --oneline
 ```
@@ -63,3 +68,9 @@ branch name is for development; the consuming project pins an exact commit.
 Runtime environments, DICOM, weights, model manifests and generated results are
 excluded from version control. The public example is acquired from its original
 source with attribution; the fork contains the downloader and instructions.
+
+An ignored `.spinosarc.local.json` can select an existing runtime without copying
+environments or models. `SPINOSARC_RUNTIME_ROOT` overrides it; with neither,
+runtime files live in this checkout. The application comes from the current
+checkout; adapters default to it, with explicit provider overrides preserved.
+See `demo/runtime.example.json` for the config format.

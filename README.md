@@ -1,9 +1,17 @@
 # SpinoSarc
 
 This is the `ndreuu/SpinoSarc` fork. Our lumbar MRI demo is developed on
-`codex/lumbar-mri-demo`; `main` preserves the upstream baseline.
+`codex/lumbar-mri-demo`; the standalone development workspace is organized on
+`codex/spinosarc-workspace`. `main` preserves the upstream baseline.
 See [the fork architecture and change map](FORK.md) and
 [the demo setup, launch and results guide](demo/README.md).
+
+Development starts with [the workspace guide](docs/workspace_ru.md):
+application code is in `spinosarc_app/`, runnable tools and checks are in
+`demo/`, and research notes, plans and source comparisons are in
+[`research/`](research/README.md). See the
+[current application architecture](docs/architecture_ru.md).
+
 The original upstream documentation follows.
 
 **An open-source desktop tool for quantitative paraspinal muscle and dural sac analysis on lumbar spine MRI.**

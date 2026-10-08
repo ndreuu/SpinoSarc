@@ -104,3 +104,6 @@ var/
 artifacts/
 *.app/
 *.ima
+
+# Machine-local runtime configuration; the example belongs in demo/.
+.spinosarc.local.json

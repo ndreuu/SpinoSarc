@@ -33,18 +33,19 @@ flowchart LR
 корешков, степени стеноза и изменений конуса — следующие отдельные компоненты.
 `not_assessed` означает, что поле не оценено, а не отсутствие патологии.
 
-## Посмотреть уже рассчитанный пример в основном проекте
+## Посмотреть уже рассчитанный пример
 
-Из корня основного проекта:
+Из корня этого checkout, если подключён подготовленный runtime:
 
 ```sh
-.venv/bin/python scripts/run_spinosarc.py --example
+python3 demo/scripts/run_spinosarc.py --example
 ```
 
-Эта совместимая точка входа вызывает инструменты форка и переиспользует
-существующие окружения, MRI, веса и кеш основного проекта. Ничего переносить
-или заново скачивать не требуется. Сгенерированное `SpinoSarc Demo.app` также
-открывает этот режим.
+Для отдельного рабочего пространства порядок настройки описан в
+[docs/workspace_ru.md](../docs/workspace_ru.md). Игнорируемый
+`.spinosarc.local.json` может подключать существующие окружения, MRI, веса и
+кеш. Код приложения запускается из текущего checkout; при подключении
+готового runtime заново скачивать модели не требуется.
 
 Окно загружает открытый Sudirman0001 при наличии его манифеста, иначе SPIDER246.
 Если для точного исходного исследования сохранён успешный запуск, контуры и
@@ -99,7 +100,12 @@ AugLab `20260109`, Kornia `0.8.2`. MuscleMap: исходники закрепл�
 ## Внешний каталог с runtime и кешем
 
 `SPINOSARC_RUNTIME_ROOT` меняет каталог окружений, данных, весов и результатов.
-Исходники и адаптеры всегда берутся из текущего checkout форка. Например,
+При отсутствии переменной используется `runtime_root` из игнорируемого
+`.spinosarc.local.json`, если этот файл существует. Формат:
+[runtime.example.json](runtime.example.json). Относительный путь в JSON
+считается от корня репозитория.
+Код приложения берётся из текущего checkout форка; адаптеры по умолчанию тоже
+выбираются из него. Явные настройки `SPINE_TSS_*` сохраняются. Например,
 из `vendor/spinosarc` основного проекта:
 
 ```sh
@@ -108,7 +114,7 @@ python3.12 demo/scripts/setup_spinosarc.py --verify-only
 python3.12 demo/scripts/run_spinosarc.py --example
 ```
 
-По умолчанию runtime находится в самом независимом checkout. Также доступны
+Без переменной и локального JSON runtime находится в самом checkout. Также доступны
 настройки `SPINE_TSS_*`, `SPINOSARC_GUI_PYTHON`, `SPINOSARC_MUSCLEMAP_*`,
 `SPINOSARC_WORK_DIR` и пути примеров. Launcher сохраняет явно заданные настройки.
 `SPINOSARC_ENABLE_MUSCLES=0` отключает мышечную модель.
@@ -121,6 +127,13 @@ python3.12 demo/scripts/run_spinosarc.py --example
 
 ## Сохранение и воспроизведение результатов
 
+Команды ниже используют интерпретатор выбранного runtime. Из корня checkout
+один раз получить его путь; это работает и с локальным, и с внешним runtime:
+
+```sh
+spinosarc_runtime_dir="$(python3 -c 'import sys; sys.path.insert(0, "demo/scripts"); from _demo_paths import runtime_root; print(runtime_root())')"
+```
+
 Результаты каждого запуска находятся в
 `var/spinosarc/analyses/<run>/`: `process-result.json`, `findings.json`,
 `step1_levels/`, `step1_canal/`, а после мышечного анализа — `muscles/`.
@@ -131,8 +144,8 @@ python3.12 demo/scripts/run_spinosarc.py --example
 открытого примера:
 
 ```sh
-.venv-spinosarc/bin/python demo/scripts/analyze_spinosarc_example.py --cpu
-.venv-spinosarc/bin/python demo/scripts/render_spinosarc_example.py
+"$spinosarc_runtime_dir/.venv-spinosarc/bin/python" demo/scripts/analyze_spinosarc_example.py --cpu
+"$spinosarc_runtime_dir/.venv-spinosarc/bin/python" demo/scripts/render_spinosarc_example.py
 ```
 
 Первая команда запускает настоящую MuscleMap на нативных аксиальных срезах;
@@ -144,9 +157,9 @@ python3.12 demo/scripts/run_spinosarc.py --example
 
 ```sh
 python3.12 demo/scripts/setup_spinosarc.py --verify-only
-.venv-spinosarc/bin/python demo/scripts/smoke_spinosarc.py
-.venv-tss/bin/python -m pip install -r demo/requirements-test.lock
-.venv-tss/bin/python -m pytest demo/tests/test_fetch_totalspineseg.py
+"$spinosarc_runtime_dir/.venv-spinosarc/bin/python" demo/scripts/smoke_spinosarc.py
+"$spinosarc_runtime_dir/.venv-tss/bin/python" -m pip install -r demo/requirements-test.lock
+"$spinosarc_runtime_dir/.venv-tss/bin/python" -m pytest demo/tests/test_fetch_totalspineseg.py
 ```
 
 Headless smoke проверяет физическую геометрию, наклонённые DICOM-плоскости,
@@ -158,8 +171,8 @@ Downloader-тесты используют маленькие синтетиче
 Дополнительные проверки с настоящим GPU или мышечной моделью:
 
 ```sh
-.venv-tss/bin/python demo/scripts/smoke_spinosarc_mps.py
-.venv-spinosarc/bin/python demo/scripts/smoke_spinosarc_musclemap.py --cpu
+"$spinosarc_runtime_dir/.venv-tss/bin/python" demo/scripts/smoke_spinosarc_mps.py
+"$spinosarc_runtime_dir/.venv-spinosarc/bin/python" demo/scripts/smoke_spinosarc_musclemap.py --cpu
 ```
 
 Первая проверяет маленькие операции MPS без больших весов. Вторая требует
