@@ -1,0 +1,12 @@
+# GUI-only additions. Heavy imaging/torch dependencies are reused from .venv-tss.
+PyQt6==6.11.0
+PyQt6-Qt6==6.11.1
+PyQt6-sip==13.11.1
+pydicom==3.0.2
+reportlab==4.5.1
+openpyxl==3.1.5
+et_xmlfile==2.0.0
+charset-normalizer==3.4.7
+# MuscleMap backbone. Setuptools retains distutils for MONAI on Python 3.12.
+monai==1.3.2
+setuptools==75.8.0

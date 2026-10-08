@@ -96,3 +96,11 @@ docs/l4l5_extraction.csv
 docs/patient_id_map.csv
 docs/README.md
 docs/*.csv
+
+# Local fork runtime and generated examples
+.venv-tss/
+.venv-spinosarc/
+var/
+artifacts/
+*.app/
+*.ima

@@ -1,0 +1,2 @@
+# Synthetic downloader tests; GUI geometry smoke uses unittest from Python.
+pytest==9.1.1
