@@ -6,8 +6,6 @@ from dataclasses import dataclass, field, asdict
 from typing import Optional, List
 import numpy as np
 import nibabel as nib
-from skimage.filters import threshold_otsu
-from .inference_engine import MuscleMapEngine
 
 
 # === Data classes ===
@@ -71,9 +69,18 @@ class SpinoSarcAnalyzer:
         7: 'QL_R',         8: 'QL_L',
     }
 
-    def __init__(self, region='abdomen', use_gpu=True):
-        # In-process engine - model bir kere yuklenir
-        self.engine = MuscleMapEngine(region=region, use_gpu=use_gpu)
+    def __init__(self, region='abdomen', use_gpu=True, canal_only=False):
+        self.canal_only = bool(canal_only)
+        self.engine = None
+        self.muscle_labels = dict(self.MUSCLE_LABELS)
+        if not self.canal_only:
+            # The optional MuscleMap module loads its external scripts at import.
+            # Keep the canal viewer usable without those scripts or checkpoints.
+            from .inference_engine import MuscleMapEngine
+            self.engine = MuscleMapEngine(region=region, use_gpu=use_gpu)
+            if region != 'abdomen':
+                raise ValueError('SpinoSarc muscle metrics require the eight-class abdomen model.')
+            self.muscle_labels = dict(self.engine.muscle_labels)
 
     def analyze(self, slice_path: str, demographics: Optional[Demographics] = None) -> dict:
         slice_path = Path(slice_path)
@@ -86,6 +93,27 @@ class SpinoSarcAnalyzer:
             img_arr = img_arr[:, :, 0]
         pix = img_nii.header.get_zooms()[:2]
         pixel_area_mm2 = float(pix[0]) * float(pix[1])
+
+        if self.canal_only:
+            if img_arr.ndim != 2:
+                raise ValueError("Canal-only slice analysis requires a 2D or single-slice NIfTI.")
+            return {
+                'slice_path': str(slice_path),
+                'pixel_spacing_mm': list(map(float, pix)),
+                'pixel_area_mm2': pixel_area_mm2,
+                'image_shape': list(img_arr.shape),
+                'demographics': asdict(demographics) if demographics else None,
+                'analysis_mode': 'canal_only',
+                'muscle_assessment_status': 'not_assessed',
+                'muscles': [],
+                'asymmetry': {},
+                'sarcopenia': None,
+                'image_array': img_arr,
+                # This is an empty display layer, never a predicted muscle mask.
+                # The GUI supplies the separately resampled TSS canal overlay.
+                'segmentation_mask': np.zeros(img_arr.shape, dtype=np.int16),
+                'segmentation_mask_kind': 'empty_muscle_display_mask',
+            }
 
         # In-process segmentasyon - ~0.2 sn
         seg = self.engine.segment(str(slice_path))
@@ -102,17 +130,26 @@ class SpinoSarcAnalyzer:
             'pixel_area_mm2':    pixel_area_mm2,
             'image_shape':       list(img_arr.shape),
             'demographics':      asdict(demographics) if demographics else None,
+            'analysis_mode':     'canal_and_muscles',
+            'muscle_assessment_status': 'predicted_needs_review',
+            'muscle_model_provenance': self.engine.provenance,
+            'fat_fraction_method': 'otsu_intensity_proxy',
+            'fat_fraction_interpretation': 'Intensity-based estimate; not Dixon proton-density fat fraction.',
+            'sarcopenia_assessment_status': ('research_indices_only' if sarc.pmi_cm2_per_m2 is not None
+                                            else 'insufficient_demographics'),
             'muscles':           [m.to_dict() for m in muscles],
             'asymmetry':         asymmetry,
             'sarcopenia':        asdict(sarc),
             'image_array':       img_arr,
             'segmentation_mask': seg,
+            'segmentation_mask_kind': 'predicted_muscle_labels',
         }
 
     @staticmethod
     def _otsu(values):
         if len(values) < 10:
             return float('inf')
+        from skimage.filters import threshold_otsu
         try:
             return float(threshold_otsu(values))
         except Exception:
@@ -120,7 +157,7 @@ class SpinoSarcAnalyzer:
 
     def _compute_muscle_metrics(self, img, seg, pixel_area_mm2) -> List[MuscleMetrics]:
         muscles = []
-        for label, name in self.MUSCLE_LABELS.items():
+        for label, name in self.muscle_labels.items():
             mask = (seg == label)
             n_vox = int(mask.sum())
             if n_vox < 10:
@@ -201,7 +238,8 @@ class SpinoSarcAnalyzer:
             notes.append("Demographics missing - PMI could not be computed.")
 
         notes.append("Not a clinical sarcopenia diagnosis. EWGSOP2 requires muscle strength + physical performance testing.")
-        notes.append("PMI thresholds are CT-derived (Hamaguchi/Englesbe/Durand); MRI may differ by ~5-10%.")
+        notes.append("PMI thresholds originate from specific CT cohorts and have not been validated for this MRI demo.")
+        notes.append("The fat fraction field is an Otsu intensity proxy, not a Dixon fat-fraction measurement.")
 
         return SarcopeniaResult(
             pmi_cm2_per_m2=round(pmi, 2) if pmi else None,

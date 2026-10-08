@@ -99,7 +99,8 @@ class LevelMapper:
             found (IVDs not visible in the sagittal volume will be
             absent). Each value:
                 {
-                    "world_xyz": (x, y, z),       # mm in DICOM patient coords
+                    "world_xyz": (x, y, z),       # mm in NIfTI RAS coordinates
+                    "world_coordinate_system": "RAS",
                     "voxel_xyz": (i, j, k) | None,  # voxel index in the sagittal NIfTI
                     "type": "IVD" | "VB",
                     "source_label": <int> | "computed",
@@ -186,6 +187,7 @@ class LevelMapper:
             world = world_hom[:3]
             found[name] = {
                 "world_xyz": (float(world[0]), float(world[1]), float(world[2])),
+                "world_coordinate_system": "RAS",
                 "voxel_xyz": (float(vox[0]), float(vox[1]), float(vox[2])),
                 "type": "IVD",
                 "source_label": lbl,
@@ -201,6 +203,7 @@ class LevelMapper:
             wz = (result["L2-L3"]["world_xyz"][2] + result["L3-L4"]["world_xyz"][2]) / 2.0
             result["L3_body"] = {
                 "world_xyz": (wx, wy, wz),
+                "world_coordinate_system": "RAS",
                 "voxel_xyz": None,
                 "type": "VB",
                 "source_label": "computed",
@@ -217,110 +220,92 @@ class LevelMapper:
         levels: dict,
         axial_slice_metadata: list,
     ) -> dict:
-        """Add `axial_slice_idx` to each level by finding the nearest axial slice.
+        """Match RAS level markers to independent native LPS axial planes.
 
-        Parameters
-        ----------
-        levels
-            Output of `parse()`. Each value's `world_xyz` is in DICOM
-            patient coordinates (mm).
-        axial_slice_metadata
-            SpinoSarc's existing axial slice list, where each element is
-            a dict with at least:
-                - 'image_position': (x, y, z) in patient coords (mm)
-            (This is what `read_axial_dicom_series()` already returns.)
-
-        Returns
-        -------
-        dict
-            Same shape as `levels`, with `axial_slice_idx` added.
-            If a level's z is outside the axial volume, that level gets
-            `axial_slice_idx: None`.
-
-        Notes
-        -----
-        - Axial slices vary primarily in z. We match using the z component
-          of `image_position` (the position of the top-left voxel of each
-          axial slice in patient coordinates).
-        - "Nearest" is defined as the slice whose `image_position[2]`
-          minimizes |z_slice - z_level|. We also flag the level as out of
-          range if the level's z is more than half a slice gap beyond
-          either end of the volume.
+        Coverage needs perpendicular distance inside a physical slice slab
+        and the projected point inside the native pixel field of view. The
+        explicit world_coordinate_system='LPS' convention is also supported;
+        parser output and older parser dictionaries use NIfTI RAS.
         """
-        if not axial_slice_metadata:
-            # Nothing to map to; mark every level as out of range.
-            for name in levels:
-                levels[name]["axial_slice_idx"] = None
-            return levels
-
-        # Collect axial slice z positions.
-        axial_z = []
-        for s in axial_slice_metadata:
-            ipp = s.get("image_position")
-            if ipp is None or len(ipp) < 3:
-                axial_z.append(None)
-            else:
-                axial_z.append(float(ipp[2]))
-
-        # Range bounds (ignore None entries when computing bounds).
-        valid_z = [z for z in axial_z if z is not None]
-        if not valid_z:
-            for name in levels:
-                levels[name]["axial_slice_idx"] = None
-            return levels
-
-        z_min = min(valid_z)
-        z_max = max(valid_z)
-        # Typical inter-slice spacing for tolerance check.
-        if len(valid_z) >= 2:
-            sorted_z = sorted(valid_z)
-            diffs = [abs(sorted_z[i + 1] - sorted_z[i]) for i in range(len(sorted_z) - 1)]
-            median_gap = float(np.median(diffs)) if diffs else 0.0
-        else:
-            median_gap = 0.0
-
-        tolerance = max(median_gap, 1.0)  # at least 1 mm
-
-        # Gap detection threshold: a level is "covered" only if its
-        # distance to the nearest slice is less than 1.5x the median
-        # inter-slice spacing. This handles clinical lumbar protocols
-        # that take small slice groups per IVD with large gaps between
-        # groups.
-        gap_threshold = max(median_gap * 1.5, 5.0)  # at least 5 mm
-
-        for name, info in levels.items():
-            z_level = info["world_xyz"][2]
-
-            # Out-of-range check (allow half a slice gap beyond either end)
-            if z_level < z_min - tolerance / 2 or z_level > z_max + tolerance / 2:
-                info["axial_slice_idx"] = None
-                info["out_of_range"] = True
-                info["out_of_range_reason"] = "outside axial volume"
+        planes = []
+        for index, frame in enumerate(axial_slice_metadata):
+            try:
+                position = np.asarray(frame['image_position'], dtype=float)
+                orientation = np.asarray(frame['image_orientation'], dtype=float)
+                spacing = np.asarray(frame['pixel_spacing'], dtype=float)
+                shape = np.asarray(frame['pixel_array']).shape
+                thickness = float(frame['slice_thickness'])
+                if (position.shape != (3,) or orientation.shape != (6,) or spacing.shape != (2,)
+                        or len(shape) != 2 or min(shape) < 1 or thickness <= 0
+                        or not np.isfinite(np.r_[position, orientation, spacing, thickness]).all()
+                        or not (spacing > 0).all()):
+                    continue
+                col_dir, row_dir = orientation[:3], orientation[3:]
+                if (not np.allclose([np.linalg.norm(col_dir), np.linalg.norm(row_dir)], 1., atol=1e-3)
+                        or abs(np.dot(col_dir, row_dir)) > 1e-3):
+                    continue
+                col_dir = col_dir / np.linalg.norm(col_dir)
+                row_dir = row_dir / np.linalg.norm(row_dir)
+                normal = np.cross(col_dir, row_dir)
+                planes.append(dict(index=index, position=position, col_dir=col_dir,
+                                   row_dir=row_dir, normal=normal, spacing=spacing,
+                                   shape=shape, thickness=thickness))
+            except (KeyError, ValueError, TypeError):
                 continue
 
-            # Nearest slice search
-            best_idx = None
-            best_diff = float("inf")
-            for idx, z_slice in enumerate(axial_z):
-                if z_slice is None:
+        # Derive local spacing only from almost parallel neighbors. Cap it
+        # to prevent a large gap between IVD groups from inventing coverage.
+        for plane in planes:
+            gaps = []
+            for other in planes:
+                if plane is other or abs(np.dot(plane['normal'], other['normal'])) < np.cos(np.deg2rad(.5)):
                     continue
-                d = abs(z_slice - z_level)
-                if d < best_diff:
-                    best_diff = d
-                    best_idx = idx
+                gap = abs(float(np.dot(other['position'] - plane['position'], plane['normal'])))
+                if gap > 1e-3:
+                    gaps.append(gap)
+            nearest_gap = min(gaps) if gaps else plane['thickness']
+            effective_spacing = max(plane['thickness'], min(nearest_gap, 2 * plane['thickness']))
+            plane['tolerance'] = effective_spacing / 2 + .25
 
-            # Gap detection: nearest slice too far away
-            if best_diff > gap_threshold:
-                info["axial_slice_idx"] = None
-                info["out_of_range"] = True
-                info["out_of_range_reason"] = (
-                    f"nearest slice is {best_diff:.1f} mm away "
-                    f"(threshold {gap_threshold:.1f} mm) - "
-                    "level falls in a gap between axial slice groups"
+        for name, info in levels.items():
+            info.update(axial_slice_idx=None, out_of_range=True,
+                        axial_mapping_method='native_plane_distance_and_fov')
+            for stale_key in ('axial_distance_mm', 'axial_pixel_row_col', 'axial_coverage_tolerance_mm'):
+                info.pop(stale_key, None)
+            if not planes:
+                info['out_of_range_reason'] = 'no valid native axial plane geometry'
+                continue
+            try:
+                point = np.asarray(info['world_xyz'], dtype=float)
+                convention = info.get('world_coordinate_system', 'RAS').upper()
+                if point.shape != (3,) or not np.isfinite(point).all() or convention not in ('RAS', 'LPS'):
+                    raise ValueError('invalid world point')
+                if convention == 'RAS':
+                    point = point * [-1., -1., 1.]
+            except (KeyError, TypeError, ValueError, AttributeError):
+                info['out_of_range_reason'] = 'invalid level world coordinates'
+                continue
+            candidates = []
+            for plane in planes:
+                offset = point - plane['position']
+                distance = abs(float(np.dot(offset, plane['normal'])))
+                col = float(np.dot(offset, plane['col_dir']) / plane['spacing'][1])
+                row = float(np.dot(offset, plane['row_dir']) / plane['spacing'][0])
+                nrow, ncol = plane['shape']
+                if -.5 <= row <= nrow - .5 and -.5 <= col <= ncol - .5:
+                    candidates.append((distance, plane['index'], row, col, plane['tolerance']))
+            if not candidates:
+                info['out_of_range_reason'] = 'level projects outside native axial field of view'
+                continue
+            distance, index, row, col, tolerance = min(candidates, key=lambda entry: (entry[0], entry[1]))
+            if distance > tolerance:
+                info['out_of_range_reason'] = (
+                    f'nearest native plane is {distance:.2f} mm away '
+                    f'(coverage tolerance {tolerance:.2f} mm); level is outside slice coverage or in an axial gap'
                 )
-            else:
-                info["axial_slice_idx"] = best_idx
-                info["out_of_range"] = False
-                info["axial_distance_mm"] = best_diff
-
+                continue
+            info.update(axial_slice_idx=index, out_of_range=False,
+                        axial_distance_mm=distance, axial_pixel_row_col=[row, col],
+                        axial_coverage_tolerance_mm=tolerance)
+            info.pop('out_of_range_reason', None)
         return levels

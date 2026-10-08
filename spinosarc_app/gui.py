@@ -157,6 +157,17 @@ class ImageDisplay(QLabel):
         rgb = np.ascontiguousarray(rgb)
         qimg = QImage(rgb.tobytes(), w, h, w*3, QImage.Format.Format_RGB888)
         pix = QPixmap.fromImage(qimg)
+        # Local fork: respect physical in-plane spacing when supplied.
+        # Coordinate mapping remains in original pixel fractions.
+        physical_spacing = getattr(self, '_physical_spacing', None)
+        if physical_spacing:
+            row_mm, col_mm = physical_spacing
+            if self._rotation % 2:
+                row_mm, col_mm = col_mm, row_mm
+            scale = min(row_mm, col_mm)
+            pix = pix.scaled(round(w * col_mm / scale), round(h * row_mm / scale),
+                             Qt.AspectRatioMode.IgnoreAspectRatio,
+                             Qt.TransformationMode.SmoothTransformation)
         scaled = pix.scaled(self.size(), Qt.AspectRatioMode.KeepAspectRatio,
                              Qt.TransformationMode.SmoothTransformation)
         self._pix_w = scaled.width()

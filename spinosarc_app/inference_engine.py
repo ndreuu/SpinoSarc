@@ -6,6 +6,8 @@ Setup once, segment many times. Model stays in RAM.
 import os
 import sys
 import logging
+import hashlib
+import json
 from contextlib import nullcontext
 from pathlib import Path
 
@@ -70,12 +72,16 @@ class MuscleMapEngine:
     NORM_MAP = {'instance': Norm.INSTANCE}
 
     def __init__(self, region: str = 'abdomen',
-                 model_version: str = 'latest',
+                 model_version: str = None,
                  use_gpu: bool = True,
                  chunk_size = 'auto',
                  overlap_percent: float = 25.0):
         self.region = region
         self.chunk_size = chunk_size
+        model_version = model_version or os.environ.get(
+            'SPINOSARC_MUSCLEMAP_MODEL_VERSION', '0.0' if region == 'abdomen' else 'latest'
+        )
+        self.model_version = str(model_version)
 
         # 1) Device sec: cuda > mps > cpu
         if use_gpu and torch.cuda.is_available():
@@ -97,17 +103,19 @@ class MuscleMapEngine:
         # 3) Model + config yolu - cache yoksa Zenodo'dan indir
         try:
             self.model_path, self.config_path = get_model_and_config_paths(
-                region, None, model_version
+                region, None, self.model_version
             )
         except Exception:
             # Cache yoksa indir
             log.info(f"Downloading model: {region} v{model_version}")
-            ensure_model_downloaded(region, model_version)
+            ensure_model_downloaded(region, self.model_version)
             self.model_path, self.config_path = get_model_and_config_paths(
-                region, None, model_version
+                region, None, self.model_version
             )
 
         cfg = load_model_config(self.config_path)
+        self.config = cfg
+        self.provenance = self._verify_model_provenance()
         log.info(f"Loaded config: {region} v{cfg.get('model', {}).get('version', '?')}")
 
         # 4) Parametreler config'den
@@ -123,6 +131,25 @@ class MuscleMapEngine:
         num_res_units                = cfg['model']['num_res_units']
         norm_str                     = cfg['model']['norm']
         label_entries                = cfg['labels']
+        anatomy_names = {
+            'multifidus': 'multifidus', 'erector spinae': 'erector',
+            'psoas major': 'psoas', 'quadratus lumborum': 'QL',
+        }
+        self.muscle_labels = {}
+        if region == 'abdomen':
+            for entry in label_entries:
+                anatomy = anatomy_names.get(entry['anatomy'].lower())
+                side = {'right': 'R', 'left': 'L'}.get(entry['side'].lower())
+                if anatomy is None or side is None:
+                    raise ValueError('Unexpected MuscleMap abdomen anatomy or side.')
+                label = int(entry['value'])
+                if label in self.muscle_labels or f'{anatomy}_{side}' in self.muscle_labels.values():
+                    raise ValueError('Duplicate MuscleMap abdomen label.')
+                self.muscle_labels[label] = f'{anatomy}_{side}'
+            expected = {f'{name}_{side}' for name in anatomy_names.values() for side in ('R', 'L')}
+            if set(self.muscle_labels.values()) != expected or self.out_channels != 9:
+                raise ValueError('The selected model does not contain the expected eight abdomen muscles.')
+        self.provenance['labels'] = self.muscle_labels
 
         # Label mapping (wholebody icin gerekli)
         labels = sorted({e['value'] for e in label_entries})
@@ -149,6 +176,10 @@ class MuscleMapEngine:
         # 6) Post-transforms (CPU'da; MPS uyumsuzluk fix'i icin)
         post_device = torch.device('cpu')
         post_list = [
+            # Invertd's device argument moves the result only after inversion.
+            # MONAI computes float64 affine grids while inverting Spacingd;
+            # move logits first because Metal has no float64 tensor support.
+            EnsureTyped(keys=['pred'], device=post_device),
             Invertd(
                 keys='pred', transform=self.pre_transforms, orig_keys='image',
                 meta_keys='pred_meta_dict', orig_meta_keys='image_meta_dict',
@@ -185,6 +216,40 @@ class MuscleMapEngine:
 
         log.info(f"MuscleMapEngine ready: region={region}, device={self.device}")
 
+    def _verify_model_provenance(self):
+        """Verify a configured local manifest without changing model files."""
+        provenance = {
+            'repository': 'https://github.com/MuscleMap/MuscleMap',
+            'region': self.region, 'model_version': self.model_version,
+            'device': str(self.device), 'checksums_verified': False,
+            'preprocessing_device': 'cpu', 'postprocessing_device': 'cpu',
+        }
+        manifest_value = os.environ.get('SPINOSARC_MUSCLEMAP_MANIFEST')
+        if not manifest_value:
+            return provenance
+        manifest_path = Path(manifest_value).resolve()
+        manifest = json.loads(manifest_path.read_text())
+        if self.region != 'abdomen' or str(manifest.get('version')) != self.model_version:
+            raise ValueError('MuscleMap manifest does not match the selected region/version.')
+        for actual_path in (self.model_path, self.config_path):
+            actual_path = Path(actual_path).resolve()
+            entry = next((entry for entry in manifest['files']
+                          if (manifest_path.parent / entry['path']).resolve() == actual_path), None)
+            if entry is None or not actual_path.is_file():
+                raise ValueError('MuscleMap model/config is not present in the configured manifest.')
+            digest = hashlib.sha256()
+            with actual_path.open('rb') as stream:
+                for chunk in iter(lambda: stream.read(1024 * 1024), b''):
+                    digest.update(chunk)
+            if actual_path.stat().st_size != entry['size'] or digest.hexdigest() != entry['sha256']:
+                raise ValueError('MuscleMap model/config checksum mismatch.')
+        provenance.update({
+            'checksums_verified': True, 'manifest_path': str(manifest_path),
+            'record_id': manifest['record_id'], 'source': manifest['source'],
+            'license': manifest['license'], 'source_revision': manifest.get('source_revision'),
+        })
+        return provenance
+
     def segment(self, image_path: str, output_dir: str = None) -> np.ndarray:
         """
         Segment a NIfTI 2D slice or 3D volume.
@@ -212,7 +277,16 @@ class MuscleMapEngine:
         )
 
         # Load segmentation back as numpy
-        seg = nib.load(out_path).get_fdata().astype(np.int16)
+        predicted = nib.load(out_path)
+        original = nib.load(image_path)
+        if predicted.shape != original.shape or not np.allclose(predicted.affine, original.affine, atol=1e-4):
+            raise ValueError('MuscleMap prediction is not aligned with the original native NIfTI grid.')
+        raw_seg = np.asarray(predicted.dataobj)
+        if not np.isfinite(raw_seg).all() or not np.equal(raw_seg, np.round(raw_seg)).all():
+            raise ValueError('MuscleMap prediction contains invalid label values.')
+        seg = raw_seg.astype(np.int16)
+        if self.region == 'abdomen' and not set(np.unique(seg)).issubset({0, *self.muscle_labels}):
+            raise ValueError('MuscleMap prediction contains labels absent from its configuration.')
 
         if not write_disk:
             import shutil

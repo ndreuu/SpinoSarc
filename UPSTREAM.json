@@ -1,0 +1,7 @@
+{
+  "repository": "https://github.com/neuromath/SpinoSarc",
+  "revision": "63b7405d1276740dfde75e00d1e7ad58da6c10fd",
+  "purpose": "Independently versioned lumbar MRI desktop demo fork; upstream LICENSE retained",
+  "fork_repository": "https://github.com/ndreuu/SpinoSarc",
+  "development_branch": "codex/lumbar-mri-demo"
+}

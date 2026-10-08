@@ -116,6 +116,10 @@ class MultiLevelAnalyzer:
                 progress_callback(msg)
 
         out = {"levels": {}, "sarcopenia": None}
+        canal_only = bool(getattr(self.analyzer, "canal_only", False))
+        if canal_only:
+            out["analysis_mode"] = "canal_only"
+            out["muscle_assessment_status"] = "not_assessed"
 
         # ---- Per-IVD muscle + canal + stenosis ----
         for level_name in IVD_LEVELS:
@@ -127,6 +131,11 @@ class MultiLevelAnalyzer:
                     "axial_slice_idx": None,
                     "error": "level not detected",
                 }
+                if canal_only:
+                    out["levels"][level_name].update(
+                        muscles=[], asymmetry={},
+                        muscle_assessment_status="not_assessed",
+                    )
                 continue
 
             ax_idx = info.get("axial_slice_idx")
@@ -134,11 +143,20 @@ class MultiLevelAnalyzer:
                 "axial_slice_idx": ax_idx,
                 "covered": ax_idx is not None,
             }
+            if canal_only:
+                entry.update(muscles=[], asymmetry={},
+                             muscle_assessment_status="not_assessed",
+                             diagnostic_assessment_status="not_assessed")
+                if ax_idx is None:
+                    entry.update(canal_csa_mm2=None, stenosis=None,
+                                 note=info.get("out_of_range_reason", "level is not covered by native axial slices"))
+                    out["levels"][level_name] = entry
+                    continue
 
             # --- Canal CSA (works even if muscle slice is missing) ---
             canal_csa = self._canal_csa_for_slice(ax_idx, canal_threshold)
             entry["canal_csa_mm2"] = canal_csa
-            if canal_csa is not None:
+            if canal_csa is not None and not canal_only:
                 entry["stenosis"] = classify_stenosis(canal_csa, level_name)
             else:
                 entry["stenosis"] = None
@@ -171,6 +189,11 @@ class MultiLevelAnalyzer:
 
             label_suffix = (f" (approx: nearest slice {approx_dist:.1f} mm away)"
                             if approx else "")
+            if canal_only:
+                _progress(f"Measuring canal at {level_name} "
+                          f"(slice {ax_idx + 1}){label_suffix}...")
+                out["levels"][level_name] = entry
+                continue
             _progress(f"Analyzing muscles at {level_name} "
                       f"(slice {ax_idx + 1}){label_suffix}...")
             try:
@@ -192,9 +215,10 @@ class MultiLevelAnalyzer:
             out["levels"][level_name] = entry
 
         # ---- L3 sarcopenia ----
-        out["sarcopenia"] = self._analyze_sarcopenia(
-            detected_levels, slice_nifti_producer, demographics, _progress
-        )
+        if not canal_only:
+            out["sarcopenia"] = self._analyze_sarcopenia(
+                detected_levels, slice_nifti_producer, demographics, _progress
+            )
 
         return out
 
