@@ -26,7 +26,7 @@ radiology report generation require separate diagnostic components.
 
 | Files | Change |
 |---|---|
-| `spinosarc_app/lumbar_demo.py` | Dedicated demo entry point; anatomy and muscle workflows, native overlays, cache, JSON/PNG export |
+| `spinosarc_app/lumbar_demo.py` | Dedicated demo entry point; anatomy and muscle workflows, native overlays, cache, JSON/PNG export, scrollable controls on laptop displays |
 | `spinosarc_app/demo_io.py` | MHA/NIfTI and classic MR DICOM; source-frame identity and exact native-plane geometry |
 | `spinosarc_app/totalspineseg/level_mapper.py` | RAS/LPS-aware point-to-plane matching; field-of-view and coverage checks |
 | `spinosarc_app/totalspineseg/runner.py` | Local pinned runtime, cancellable owned processes, explicit cleanup recovery |

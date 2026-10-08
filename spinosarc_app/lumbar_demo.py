@@ -9,7 +9,9 @@ import numpy as np
 import nibabel as nib
 from nibabel.processing import resample_from_to
 from PyQt6.QtCore import QThread, QTimer, pyqtSignal, Qt
-from PyQt6.QtWidgets import QApplication, QFileDialog, QLabel, QMessageBox, QPushButton, QListWidgetItem, QTableWidgetItem
+from PyQt6.QtWidgets import (QApplication, QFileDialog, QLabel, QMessageBox, QPushButton,
+                            QListWidgetItem, QTableWidgetItem, QScrollArea, QSplitter,
+                            QLayout, QFrame)
 from .gui import SpinoSarcWindow, SUCCESS, PRIMARY, EngineLoaderThread
 from .analyzer import SpinoSarcAnalyzer
 from .demo_io import prepare_volumes, write_native_slice_nifti, native_slice_affine
@@ -135,6 +137,7 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
             widget.setVisible(self.muscles_requested)
         self.muscle_table.setHorizontalHeaderLabels(['Muscle', 'Area mm²', 'Intensity FF* %'])
         self.muscle_table.setToolTip('FF is an intensity-based Otsu estimate, not a quantitative Dixon fat fraction.')
+        self._make_sidebar_scrollable()
         for label in self.findChildren(QLabel):
             if label.text() == 'Paraspinal Muscle & Sarcopenia Analyzer':
                 label.setText('Lumbar anatomy, canal and muscles · research demo')
@@ -153,6 +156,29 @@ class SpinoSarcDemoWindow(SpinoSarcWindow):
         button = QPushButton('Load open axial + sagittal example' if example_manifest and Path(example_manifest).is_file() else 'Load open SPIDER example')
         button.clicked.connect(self.load_open_example)
         self.centralWidget().layout().insertWidget(2, button)
+
+    def _make_sidebar_scrollable(self):
+        """Keep controls readable when the demo runs on a laptop display."""
+        splitter = self.centralWidget().findChild(QSplitter)
+        sidebar = splitter.widget(1)
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setFrameShape(QFrame.Shape.NoFrame)
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setMinimumWidth(380)
+        scroll.setMaximumWidth(420)
+        splitter.replaceWidget(1, scroll)
+        sidebar.setMinimumWidth(0)
+        sidebar.setMaximumWidth(16777215)
+        sidebar.layout().setSizeConstraint(QLayout.SizeConstraint.SetMinimumSize)
+        self.levels_list.setMinimumHeight(140)
+        self.muscle_table.setMinimumHeight(250)
+        self.risk_label.setWordWrap(True)
+        for field in (self.patient_id_input, self.age_input, self.sex_input,
+                      self.height_input, self.weight_input):
+            field.setMinimumHeight(field.sizeHint().height())
+        scroll.setWidget(sidebar)
+        self.sidebar_scroll = scroll
 
     def load_open_example(self):
         if self._analysis_running():
