@@ -10,6 +10,7 @@ Standalone workspace branch: `codex/spinosarc-workspace`.
 branch; the upstream license, citation, paper and original build files are retained.
 The original README below the fork notice describes the upstream application.
 Use [demo/README.md](demo/README.md) for this branch's actual capabilities and setup.
+See [the detailed upstream change audit](docs/upstream_changes_ru.md) for each original-file change, its reason and behavior differences.
 Use [docs/workspace_ru.md](docs/workspace_ru.md) for standalone development and
 [research/README.md](research/README.md) for research material. Research snapshots
 from the original backend project are clearly marked and do not imply its API
